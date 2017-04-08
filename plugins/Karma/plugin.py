@@ -245,35 +245,49 @@ class Karma(callbacks.Plugin):
             irc.noReply()
 
     def _doKarma(self, irc, msg, channel, thing):
+        def get_karma_word(thing, suffixes):
+            words = thing.split()
+            karma_words = [word for word in words if word.endswith(tuple(suffixes))]
+
+            if len(karma_words != 1):
+                return None
+
+            return karma_words[0]
+
         inc = self.registryValue('incrementChars', channel)
         dec = self.registryValue('decrementChars', channel)
-        onlynicks = self.registryValue('onlyNicks', channel)
+        inc_word = get_karma_word(thing, inc)
+        dec_word = get_karma_word(thing, dec)
+
+        # Ignore if there is not an unambigous op
+        if (inc_word is None) != (dec_word is None):
+            return
+
+        word = inc_word or dec_word
+        cmp_word = self._normalizeThing(ircutils.toLower(word))
+
+        # Don't karma if self rating is disabled
+        allow_self_rating = self.registryValue('allowSelfRating', channel)
+        if not allow_self_rating and cmp_word == ircutils.toLower(msg.nick):
+            irc.error(_('You\'re not allowed to adjust your own karma.'))
+            return
+
+        # Don't karma if the target isn't a nick
+        only_nicks = self.registryValue('onlyNicks', channel)
+        if only_nicks:
+            users = [ircutils.toLower(user) for user in irc.state.channels[channel].users]
+            if not cmp_word in users:
+                return
+
+        # Execute the karma op
         karma = ''
-        for s in inc:
-            if thing.endswith(s):
-                thing = thing[:-len(s)]
-                # Don't reply if the target isn't a nick
-                if onlynicks and thing.lower() not in map(ircutils.toLower,
-                        irc.state.channels[channel].users):
-                    return
-                if ircutils.strEqual(thing, msg.nick) and \
-                    not self.registryValue('allowSelfRating', channel):
-                        irc.error(_('You\'re not allowed to adjust your own karma.'))
-                        return
-                self.db.increment(channel, self._normalizeThing(thing))
-                karma = self.db.get(channel, self._normalizeThing(thing))
-        for s in dec:
-            if thing.endswith(s):
-                thing = thing[:-len(s)]
-                if onlynicks and thing.lower() not in map(ircutils.toLower,
-                        irc.state.channels[channel].users):
-                    return
-                if ircutils.strEqual(thing, msg.nick) and \
-                    not self.registryValue('allowSelfRating', channel):
-                    irc.error(_('You\'re not allowed to adjust your own karma.'))
-                    return
-                self.db.decrement(channel, self._normalizeThing(thing))
-                karma = self.db.get(channel, self._normalizeThing(thing))
+        if inc_word:
+            self.db.increment(channel, cmp_word)
+            karma = self.db.get(channel, cmp_word)
+        else:
+            self.db.decrement(channel, cmp_word)
+            karma = self.db.get(channel, cmp_word)
+
         if karma:
             self._respond(irc, channel, thing, karma[0]-karma[1])
 
